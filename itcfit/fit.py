@@ -68,6 +68,7 @@ class FitResult:
             out[f"dG{suffix}_kJmol"] = dg
             out[f"dG{suffix}_err"] = R * T * np.log(10) * s_lk
             out[f"-TdS{suffix}_kJmol"] = dg - dh
+            out[f"dS{suffix}_JmolK"] = (dh - dg) / T * 1e3
             out[f"c{suffix}"] = n * ka * self.design.cell_conc * 1e-3
         return out
 

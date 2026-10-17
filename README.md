@@ -38,11 +38,15 @@ On Windows: `py fit_itc.py C:\ITC\run1.nitc`. Install the dependencies once with
   any remaining constant heat. To rely on the blank alone, add `--fix dH0=0`. If the blank
   file sits in the same folder as the samples, it is skipped as a sample automatically.
 
+Figure labels: `--label Histamine` sets the name drawn in the thermogram panel (default: the file
+name); `--sample-label` and `--blank-label` set the trace descriptions in the footer (default
+"ligand into receptor" / "ligand into buffer").
+
 ## Outputs (default: `itcfit_results/` next to each input file)
 
 | file | content |
 |---|---|
-| `<run>_fit.png` | thermogram + baseline, isotherm + fit + parameter box, residuals |
+| `<run>_fit.png` | thermogram (baseline-subtracted; sample green, blank blue), isotherm (offset-removed points, smooth fit, Kd/n/ΔH/ΔS), residuals, and a footer with trace key, model, concentrations, ΔG/−TΔS/c, RMSD and bootstrap CIs (`--format svg`/`pdf` for editable figures) |
 | `<run>_injections.csv` | per-injection volume, Mt, Xt, molar ratio, heat (µJ), normalized ΔH, fit |
 | `<run>_fit.json` | all parameters, 1 SD errors, bootstrap CIs, ΔG, −TΔS, c-value, warnings |
 | `<run>_thermogram.csv` | time, heat rate, baseline (with `--thermogram`) |

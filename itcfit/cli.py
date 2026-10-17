@@ -62,14 +62,14 @@ def _warnings(result) -> list[str]:
     return warns
 
 
-def load_blank(args) -> tuple[np.ndarray, np.ndarray] | None:
-    """Integrated heats (uJ) and volumes (uL) of the buffer/blank run, if given."""
+def load_blank(args):
+    """The buffer/blank run and its integration, if given."""
     if not args.blank:
         return None
     blank = read_nitc(args.blank)
     exo_up = blank.exotherm_up ^ args.flip_sign
     integ = integrate(blank, baseline=args.baseline, window=args.window, exotherm_up=exo_up)
-    return integ.heat, blank.inj_volume
+    return blank, integ
 
 
 def process(path: Path, args, outdir: Path, blank=None) -> dict:
@@ -86,7 +86,7 @@ def process(path: Path, args, outdir: Path, blank=None) -> dict:
     blank_q = None
     heats = integ.heat
     if blank is not None:
-        blank_q = blank_correction(blank[0], blank[1], run.inj_volume,
+        blank_q = blank_correction(blank[1].heat, blank[0].inj_volume, run.inj_volume,
                                    mode=args.blank_mode, exclude=args.exclude)
         heats = integ.heat - blank_q
     design = Design(run.inj_volume, run.cell_volume, run.cell_conc, run.syringe_conc,
@@ -126,7 +126,9 @@ def process(path: Path, args, outdir: Path, blank=None) -> dict:
 
     plot_fit(run, integ, result, f"{stem}_fit.{args.format}", energy=args.energy,
              exotherm_up=exo_up, exotherm_display=args.exotherm_display,
-             blank=None if not args.blank else blank_q)
+             title=args.label, blank_run=blank[0] if blank else None,
+             blank_integ=blank[1] if blank else None, blank_mode=args.blank_mode,
+             sample_label=args.sample_label, blank_label=args.blank_label)
 
     th = {k: float(v) for k, v in result.thermodynamics().items()}
     warns = _warnings(result)
@@ -203,6 +205,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--blank-mode", choices=["mean", "pointwise"], default="mean",
                    help="mean: subtract the average blank heat per injection (excluding the "
                         "--exclude injections); pointwise: injection-by-injection (default: mean)")
+    p.add_argument("--label", help="name drawn in the thermogram panel (default: file name)")
+    p.add_argument("--sample-label", default="ligand into receptor",
+                   help="footer description of the sample (green) trace")
+    p.add_argument("--blank-label", default="ligand into buffer",
+                   help="footer description of the blank (blue) trace")
     p.add_argument("--exotherm-display", choices=["down", "up"], default="down",
                    help="draw exothermic peaks down (MicroCal style) or up (default: down)")
     p.add_argument("--bootstrap", type=int, default=0, metavar="N",

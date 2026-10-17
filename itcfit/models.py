@@ -170,3 +170,27 @@ def get_model(name: str) -> Model:
         return MODELS[name.lower()]()
     except KeyError:
         raise ValueError(f"unknown model {name!r}; choose from {', '.join(MODELS)}") from None
+
+
+def smooth_isotherm(model: Model, p: dict[str, float], d: Design,
+                    n: int = 400) -> tuple[np.ndarray, np.ndarray]:
+    """Continuous fit curve: molar ratio vs. heat per mol injectant (kJ/mol).
+
+    Evaluates the same finite-injection model at ``n`` cumulative volumes,
+    each for an injection of the median volume, so the curve passes through
+    the fitted values of equal-volume injections.  The dilution offset is left
+    out (dH0 = 0).
+    """
+    v = float(np.median(d.volumes))
+    total = float(np.sum(d.volumes))
+    q = dict(p)
+    if "dH0" in q:
+        q["dH0"] = 0.0
+    xs, ys = [], []
+    for vc in np.linspace(v, total, n):
+        sub = Design(np.array([vc - v, v]) if vc > v else np.array([v]),
+                     d.cell_volume, d.cell_conc, d.syringe_conc, d.temperature)
+        dq = model.heats(q, sub)[-1]
+        xs.append(sub.molar_ratio[-1])
+        ys.append(dq / (v * d.syringe_conc))
+    return np.asarray(xs), np.asarray(ys)

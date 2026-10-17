@@ -74,3 +74,13 @@ def test_blank_correction_modes():
     np.testing.assert_allclose(mean, -1.0 * vs)            # -1.0 uJ/uL average
     pw = blank_correction(blank, vb, vs, mode="pointwise")
     np.testing.assert_allclose(pw, [-5.0, -2.5, -2.75])
+
+
+def test_smooth_curve_passes_through_fitted_points():
+    from itcfit.models import smooth_isotherm
+    d = _design(volumes=np.full(20, 2.0), cell_volume=185.0, cell_conc=0.005, syringe_conc=0.05)
+    m = get_model("onesite")
+    p = {"logKa": 7.9, "dH": -70.0, "n": 1.04, "dH0": -9.0}
+    x, y = smooth_isotherm(m, p, d)
+    pts = m.heats({**p, "dH0": 0.0}, d) / d.injected_mol
+    np.testing.assert_allclose(np.interp(d.molar_ratio, x, y), pts, rtol=1e-6)

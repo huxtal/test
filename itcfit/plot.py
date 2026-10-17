@@ -94,16 +94,23 @@ def plot_fit(run: ITCRun, integ: Integration, result: FitResult, path,
                  label="blank (subtracted)")
     ax1.plot(x, yfit, "-", color="tab:red", lw=1.3, label=f"fit ({result.model.name})")
     ax1.set_ylabel(f"ΔH ({energy}/mol of injectant)")
-    ax1.legend(fontsize=8, frameon=False, loc="lower right")
+    # Put the parameter box in the empty corner: lower right for a rising
+    # (exothermic) isotherm, upper right for a falling (endothermic) one.
+    rising = yfit[-1] > yfit[0]
+    ax1.legend(fontsize=8, frameon=False, loc="center right")
     plt.setp(ax1.get_xticklabels(), visible=False)
-    ax1.text(0.03, 0.97, "\n".join(summary_lines(result, energy)), transform=ax1.transAxes,
-             va="top", ha="left", fontsize=7.5, family="DejaVu Sans",
+    ax1.text(0.97, 0.03 if rising else 0.97, "\n".join(summary_lines(result, energy)),
+             transform=ax1.transAxes, va="bottom" if rising else "top", ha="right",
+             fontsize=7.5, family="DejaVu Sans",
              bbox=dict(boxstyle="round", fc="white", ec="0.8", alpha=0.9))
 
     ax2.axhline(0, color="0.5", lw=0.8)
     ax2.plot(x[inc], res[inc], "s", ms=3.5, color="black")
+    # Scale to the fitted points; excluded injections are clipped to the edge.
+    lim = 1.25 * max(np.abs(res[inc]).max(), 1e-12)
+    ax2.set_ylim(-lim, lim)
     if (~inc).any():
-        ax2.plot(x[~inc], res[~inc], "s", ms=3.5, mfc="none", color="gray")
+        ax2.plot(x[~inc], np.clip(res[~inc], -lim, lim), "s", ms=3.5, mfc="none", color="gray")
     ax2.set_xlabel("Molar ratio")
     ax2.set_ylabel("Resid.")
 

@@ -68,3 +68,33 @@ def integrate(run: ITCRun, baseline: str = "auto", window: float = 20.0,
     up = run.exotherm_up if exotherm_up is None else exotherm_up
     heat = -area if up else area
     return Integration(base, nx, ny, area, heat, noise)
+
+
+def blank_correction(blank_heat: np.ndarray, blank_volume: np.ndarray,
+                     sample_volume: np.ndarray, mode: str = "mean",
+                     exclude: list[int] | None = None) -> np.ndarray:
+    """Heat (uJ) to subtract from each sample injection, from a buffer/blank run.
+
+    ``mean``: average blank heat per uL injected (excluding the 1-based
+    injections in ``exclude``), scaled by each sample injection volume.
+    ``pointwise``: subtract blank injection i from sample injection i
+    (volume-scaled; injections beyond the blank's length use the mean).
+    """
+    blank_heat = np.asarray(blank_heat, float)
+    per_ul = blank_heat / np.asarray(blank_volume, float)
+    keep = np.ones(len(per_ul), bool)
+    for i in exclude or []:
+        if 1 <= i <= len(keep):
+            keep[i - 1] = False
+    if not keep.any():
+        keep[:] = True
+    mean_per_ul = float(np.mean(per_ul[keep]))
+    sample_volume = np.asarray(sample_volume, float)
+    if mode == "mean":
+        return mean_per_ul * sample_volume
+    if mode == "pointwise":
+        out = np.full(len(sample_volume), mean_per_ul)
+        n = min(len(out), len(per_ul))
+        out[:n] = per_ul[:n]
+        return out * sample_volume
+    raise ValueError(f"unknown blank mode {mode!r} (use 'mean' or 'pointwise')")

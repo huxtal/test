@@ -63,3 +63,14 @@ def test_read_and_fit_sample():
     d = Design(run.inj_volume, run.cell_volume, run.cell_conc, run.syringe_conc, run.temperature)
     r = fit(get_model("onesite"), d, integ.heat, exclude=[1])
     assert r.success and r.r_squared > 0.9
+
+
+def test_blank_correction_modes():
+    from itcfit.integrate import blank_correction
+    blank = np.array([-10.0, -2.0, -2.2, -1.8, -2.0])     # first injection is an outlier
+    vb = np.full(5, 2.0)
+    vs = np.array([1.0, 2.5, 2.5])
+    mean = blank_correction(blank, vb, vs, mode="mean", exclude=[1])
+    np.testing.assert_allclose(mean, -1.0 * vs)            # -1.0 uJ/uL average
+    pw = blank_correction(blank, vb, vs, mode="pointwise")
+    np.testing.assert_allclose(pw, [-5.0, -2.5, -2.75])

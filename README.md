@@ -9,11 +9,34 @@ python fit_itc.py run1.nitc                      # one file
 python fit_itc.py /data/ITC/2026-10/             # every .nitc under a folder (batch)
 python fit_itc.py *.nitc --fix n=1 --energy kcal --format pdf
 python fit_itc.py blank.nitc -m blank            # control titration (heat of dilution)
+python fit_itc.py run1.nitc run2.nitc --blank buffer.nitc        # subtract buffer run (average)
+python fit_itc.py run1.nitc --blank buffer.nitc --blank-mode pointwise
 python fit_itc.py run1.nitc -m twosites --bootstrap 200
 ```
 
 On Windows: `py fit_itc.py C:\ITC\run1.nitc`. Install the dependencies once with
 `pip install -r requirements.txt` (numpy, scipy, matplotlib).
+
+## Units, exotherm direction and buffer subtraction
+
+- **Units.** By default everything is in calories: heat rate in µcal/s, heats in µcal, and ΔH,
+  ΔG and −TΔS in kcal/mol. `--energy kJ` switches to µJ/s, µJ and kJ/mol. Internally the
+  calculations stay in µJ (the instrument's native unit) and are converted only for output.
+- **Exotherm direction.** Affinity files are saved with `ExothermUp=True`. By default the
+  figure draws exothermic peaks **down**, MicroCal style; `--exotherm-display up` keeps the
+  instrument's orientation. This only changes how the plot is drawn. The thermodynamic sign
+  (exothermic binding gives ΔH < 0) always follows the file's flag. Use `--flip-sign` only
+  if that flag is actually wrong for a file.
+- **Buffer / blank subtraction.** `--blank buffer.nitc` integrates the control run (titrant
+  into buffer) the same way as the samples, then subtracts it before fitting:
+  - `mean` (default): the average blank heat per µL, leaving out the `--exclude` injections
+    (normally the first), scaled to each sample injection's volume.
+  - `pointwise`: blank injection i is subtracted from sample injection i.
+
+  The subtracted values appear in the injections CSV (`raw_heat`, `blank` and `heat`
+  columns) and as blue triangles on the isotherm. The fitted offset (`dH0`) still absorbs
+  any remaining constant heat. To rely on the blank alone, add `--fix dH0=0`. If the blank
+  file sits in the same folder as the samples, it is skipped as a sample automatically.
 
 ## Outputs (default: `itcfit_results/` next to each input file)
 

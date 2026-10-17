@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from .fit import bootstrap, fit
-from .integrate import integrate
+from .integrate import blank_correction, integrate
 from .models import MODELS, Design, get_model
 from .nitc import read_nitc
 from .plot import KCAL, plot_fit
@@ -62,7 +62,17 @@ def _warnings(result) -> list[str]:
     return warns
 
 
-def process(path: Path, args, outdir: Path) -> dict:
+def load_blank(args) -> tuple[np.ndarray, np.ndarray] | None:
+    """Integrated heats (uJ) and volumes (uL) of the buffer/blank run, if given."""
+    if not args.blank:
+        return None
+    blank = read_nitc(args.blank)
+    exo_up = blank.exotherm_up ^ args.flip_sign
+    integ = integrate(blank, baseline=args.baseline, window=args.window, exotherm_up=exo_up)
+    return integ.heat, blank.inj_volume
+
+
+def process(path: Path, args, outdir: Path, blank=None) -> dict:
     run = read_nitc(path)
     if args.cell_conc is not None:
         run.cell_conc = args.cell_conc
@@ -73,36 +83,50 @@ def process(path: Path, args, outdir: Path) -> dict:
     exo_up = run.exotherm_up ^ args.flip_sign
 
     integ = integrate(run, baseline=args.baseline, window=args.window, exotherm_up=exo_up)
+    blank_q = None
+    heats = integ.heat
+    if blank is not None:
+        blank_q = blank_correction(blank[0], blank[1], run.inj_volume,
+                                   mode=args.blank_mode, exclude=args.exclude)
+        heats = integ.heat - blank_q
     design = Design(run.inj_volume, run.cell_volume, run.cell_conc, run.syringe_conc,
                     run.temperature)
     model = get_model(args.model)
-    result = fit(model, design, integ.heat, exclude=args.exclude, fixed=_parse_fix(args.fix))
+    result = fit(model, design, heats, exclude=args.exclude, fixed=_parse_fix(args.fix))
     if args.bootstrap:
         bootstrap(result, n=args.bootstrap)
 
     stem = outdir / run.name
     f = KCAL if args.energy == "kcal" else 1.0
     eu = f"{args.energy}_mol"
+    hu = "ucal" if args.energy == "kcal" else "uJ"
+    if blank_q is None:
+        blank_q = np.zeros(run.n_injections)
 
     with open(f"{stem}_injections.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["injection", "start_s", "end_s", "volume_uL", "Mt_mM", "Xt_mM",
-                    "molar_ratio", "heat_uJ", "heat_noise_uJ", f"dH_{eu}_injectant",
+                    "molar_ratio", f"raw_heat_{hu}", f"blank_{hu}", f"heat_{hu}",
+                    f"heat_noise_{hu}", f"dH_{eu}_injectant",
                     f"fit_{eu}_injectant", "included"])
         nmol = design.injected_mol
         for i in range(run.n_injections):
             w.writerow([i + 1, run.inj_start[i], run.inj_end[i], run.inj_volume[i],
                         f"{design.Mt[i]:.6g}", f"{design.Xt[i]:.6g}",
-                        f"{design.molar_ratio[i]:.6g}", f"{integ.heat[i]:.6g}",
-                        f"{integ.noise[i]:.3g}", f"{integ.heat[i] / nmol[i] / f:.6g}",
+                        f"{design.molar_ratio[i]:.6g}", f"{integ.heat[i] / f:.6g}",
+                        f"{blank_q[i] / f:.6g}", f"{heats[i] / f:.6g}",
+                        f"{integ.noise[i] / f:.3g}", f"{heats[i] / nmol[i] / f:.6g}",
                         f"{result.fitted[i] / nmol[i] / f:.6g}", int(result.included[i])])
 
     if args.thermogram:
         np.savetxt(f"{stem}_thermogram.csv",
-                   np.column_stack([run.time, run.heat_rate, integ.baseline]),
-                   delimiter=",", header="time_s,heat_rate_uJ_s,baseline_uJ_s", comments="")
+                   np.column_stack([run.time, run.heat_rate / f, integ.baseline / f]),
+                   delimiter=",", header=f"time_s,heat_rate_{hu}_s,baseline_{hu}_s",
+                   comments="")
 
-    plot_fit(run, integ, result, f"{stem}_fit.{args.format}", energy=args.energy)
+    plot_fit(run, integ, result, f"{stem}_fit.{args.format}", energy=args.energy,
+             exotherm_up=exo_up, exotherm_display=args.exotherm_display,
+             blank=None if not args.blank else blank_q)
 
     th = {k: float(v) for k, v in result.thermodynamics().items()}
     warns = _warnings(result)
@@ -117,6 +141,9 @@ def process(path: Path, args, outdir: Path) -> dict:
         "excluded": [i + 1 for i in range(run.n_injections) if not result.included[i]],
         "baseline": args.baseline,
         "exotherm_up": exo_up,
+        "blank_file": args.blank,
+        "blank_mode": args.blank_mode if args.blank else None,
+        "blank_heat_uJ": blank_q.tolist(),
         "parameters": result.values,
         "errors_1sd": result.errors,
         "fixed": result.fixed,
@@ -141,7 +168,8 @@ def process(path: Path, args, outdir: Path) -> dict:
             row[k.replace("kJmol", eu)] = v / f
         elif k.startswith(("Kd", "c")):
             row[k] = v
-    row["rmsd_uJ"] = result.rmsd
+    row[f"rmsd_{hu}"] = result.rmsd / f
+    row["blank"] = Path(args.blank).name if args.blank else ""
     row["r_squared"] = result.r_squared
     row["warnings"] = "; ".join(warns)
     return row
@@ -169,10 +197,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cell-volume", type=float, help="override cell volume (uL)")
     p.add_argument("--flip-sign", action="store_true",
                    help="invert the heat sign if the file's ExothermUp flag is wrong")
+    p.add_argument("--blank", metavar="FILE",
+                   help="buffer/blank titration (.nitc) whose heats are subtracted from every "
+                        "sample before fitting")
+    p.add_argument("--blank-mode", choices=["mean", "pointwise"], default="mean",
+                   help="mean: subtract the average blank heat per injection (excluding the "
+                        "--exclude injections); pointwise: injection-by-injection (default: mean)")
+    p.add_argument("--exotherm-display", choices=["down", "up"], default="down",
+                   help="draw exothermic peaks down (MicroCal style) or up (default: down)")
     p.add_argument("--bootstrap", type=int, default=0, metavar="N",
                    help="add 95%% CIs from N residual-bootstrap refits")
-    p.add_argument("--energy", choices=["kJ", "kcal"], default="kJ",
-                   help="energy unit for plots and summary (default: kJ)")
+    p.add_argument("--energy", choices=["kJ", "kcal"], default="kcal",
+                   help="kcal: µcal/s, µcal, kcal/mol; kJ: µJ/s, µJ, kJ/mol (default: kcal)")
     p.add_argument("--format", default="png", choices=["png", "pdf", "svg"],
                    help="figure format (default: png)")
     p.add_argument("--thermogram", action="store_true",
@@ -188,12 +224,22 @@ def main(argv: list[str] | None = None) -> int:
         print("no .nitc files found", file=sys.stderr)
         return 1
 
+    try:
+        blank = load_blank(args)
+    except Exception as exc:
+        print(f"[FAIL] blank {args.blank}: {exc}", file=sys.stderr)
+        return 1
+    blank_path = Path(args.blank).resolve() if args.blank else None
+
     rows, failed = [], 0
     for path in files:
+        if blank_path is not None and path.resolve() == blank_path:
+            print(f"[SKIP] {path.name}: used as blank")
+            continue
         outdir = Path(args.outdir) if args.outdir else path.parent / "itcfit_results"
         outdir.mkdir(parents=True, exist_ok=True)
         try:
-            row = process(path, args, outdir)
+            row = process(path, args, outdir, blank)
         except Exception as exc:  # keep going through a batch
             failed += 1
             print(f"[FAIL] {path}: {exc}", file=sys.stderr)
@@ -204,7 +250,8 @@ def main(argv: list[str] | None = None) -> int:
         msg = f"[ OK ] {path.name}: "
         if kd is not None:
             msg += f"Kd = {kd:.3g} uM, n = {row.get('n', row.get('n1')):.3f}, "
-        msg += f"{dh_key} = {row[dh_key]:.2f}, RMSD = {row['rmsd_uJ']:.3g} uJ"
+        rk = next(k for k in row if k.startswith("rmsd_"))
+        msg += f"{dh_key} = {row[dh_key]:.2f}, RMSD = {row[rk]:.3g} {rk[5:]}"
         print(msg)
         if row["warnings"]:
             for w in row["warnings"].split("; "):

@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cache/
 itcfit_results/
 *.nitc
+gelquant_results/

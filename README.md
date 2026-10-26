@@ -1,3 +1,14 @@
+# Structural biology core: analysis scripts
+
+| tool | what it does | run |
+|---|---|---|
+| **itcfit** | reads TA Affinity ITC `.nitc` files directly, then integrates, fits (one/two sites), subtracts blanks and makes figures | `python fit_itc.py run.nitc` |
+| **gelquant** | SDS-PAGE images: finds lanes and bands, estimates MW from the ladder, gives % purity, tracks a target band and builds a BSA standard curve | `python quant_gel.py gel.tif` (see [gelquant/README.md](gelquant/README.md)) |
+
+Install once: `pip install -r requirements.txt`.
+
+---
+
 # itcfit: automated fitting of TA Instruments Affinity ITC data
 
 Reads `.nitc` files written by **ITCRun** (Affinity ITC / Nano ITC) directly, so there's no

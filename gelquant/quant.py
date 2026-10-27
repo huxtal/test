@@ -26,6 +26,31 @@ class StandardCurve:
 
 
 @dataclass
+class LadderMass:
+    """Band volume -> ug using the ladder bands' nominal amounts.
+
+    Coomassie binds proteins differently, so each ladder band gives its own
+    response (volume per ug); their geometric mean is the conversion factor
+    and their geometric SD (``gsd``) is a realistic fold-uncertainty.
+    """
+    factor: float               # volume per ug (geometric mean)
+    gsd: float                  # geometric SD of the per-band responses (fold)
+    points: list[tuple[int, float, float, float]]   # (lane, kDa, ug, volume)
+
+    def amount(self, volume):
+        return np.asarray(volume, float) / self.factor
+
+    def range(self, volume) -> tuple[np.ndarray, np.ndarray]:
+        a = self.amount(volume)
+        return a / self.gsd, a * self.gsd
+
+    @property
+    def cv_percent(self) -> float:
+        r = np.array([v / u for _, _, u, v in self.points])
+        return float(100 * np.std(r) / np.mean(r))
+
+
+@dataclass
 class GelResult:
     gel: GelImage
     lanes: list[Lane]
@@ -36,6 +61,7 @@ class GelResult:
     target_mw: float | None = None
     targets: dict[int, Band | None] = field(default_factory=dict)
     standard: StandardCurve | None = None
+    ladder_mass: LadderMass | None = None
     warnings: list[str] = field(default_factory=list)
 
     def low_signal(self, lane_no: int, frac: float = 0.05) -> bool:
@@ -84,6 +110,24 @@ def lane_calibration(res: GelResult, lane: Lane) -> Calibration:
     return Calibration(y, np.array(common, float), 0, True)
 
 
+def ladder_mass(res: GelResult, ug: float, reference: list[float],
+                ref_ug: float | None = None) -> LadderMass | None:
+    points = []
+    for ll, cal in res.ladder_cals.items():
+        bands = res.profile(ll).bands
+        for y, mw in zip(cal.y, cal.mw):
+            if mw in reference and ref_ug is None:
+                continue
+            b = min(bands, key=lambda q: abs(q.y - y))
+            if abs(b.y - y) < 1 and b.volume > 0:
+                points.append((ll, float(mw), ref_ug if mw in reference else ug, b.volume))
+    if len(points) < 2:
+        res.warnings.append("ladder-based amounts: fewer than 2 usable ladder bands")
+        return None
+    logr = np.log([v / u for _, _, u, v in points])
+    return LadderMass(float(np.exp(logr.mean())), float(np.exp(logr.std(ddof=1))), points)
+
+
 def analyse_gel(gel: GelImage, n_lanes: int | None = None,
                 lane_centers: list[float] | None = None, lane_width_frac: float = 0.6,
                 ball_radius: float | None = None, min_prominence: float = 0.02,
@@ -92,7 +136,15 @@ def analyse_gel(gel: GelImage, n_lanes: int | None = None,
                 ladder_reference: list[float] | None = None,
                 target_mw: float | None = None, target_tol: float = 0.1,
                 standards: dict[int, float] | None = None,
-                standard_mw: float | None = None) -> GelResult:
+                standard_mw: float | None = None,
+                ladder_ug: float | None = None,
+                ladder_ref_ug: float | None = None) -> GelResult:
+    """Run the whole analysis.
+
+    ``ladder_ug`` (ug of protein per ladder band as loaded) turns on a rough
+    mass calibration from the ladder lanes; reference bands are used only if
+    ``ladder_ref_ug`` gives their amount.
+    """
     sig = gel.signal
     lanes = detect_lanes(sig, n_lanes, lane_centers, lane_width_frac)
     radius = ball_radius or max(10.0, sig.shape[0] / 20)
@@ -133,6 +185,17 @@ def analyse_gel(gel: GelImage, n_lanes: int | None = None,
                 if abs(cal.y[i] - b.y) < 1:
                     b.mw = float(cal.mw[i])
 
+    if ladder_ug:
+        if not res.ladder_cals:
+            raise ValueError("ladder amounts need a ladder lane")
+        res.ladder_mass = ladder_mass(res, ladder_ug, ladder_reference or [], ladder_ref_ug)
+        if res.ladder_mass is not None:
+            lm = res.ladder_mass
+            res.warnings.append(
+                f"ladder-based amounts: {len(lm.points)} ladder bands, response varies "
+                f"{lm.cv_percent:.0f}% (CV) between bands; amounts are uncertain by about "
+                f"x/÷{lm.gsd:.1f} (use a BSA dilution series for accurate amounts)")
+
     if target_mw is not None:
         if not res.calibrated:
             raise ValueError("--target-mw needs a ladder lane for the MW calibration")
@@ -140,6 +203,15 @@ def analyse_gel(gel: GelImage, n_lanes: int | None = None,
         for p in res.sample_profiles:
             if p.lane.number not in (standards or {}):
                 res.targets[p.lane.number] = _closest_band(p.bands, target_mw, target_tol)
+
+    if res.ladder_mass is not None and res.targets:
+        high = [ln for ln, b in res.targets.items()
+                if b is not None and float(res.ladder_mass.amount(b.volume)) > 3 * ladder_ug]
+        if high:
+            res.warnings.append(
+                f"ladder-based amounts: target in lane(s) {', '.join(map(str, high))} is more "
+                f"than 3x the {ladder_ug:g} ug per ladder band, i.e. extrapolated beyond the "
+                "ladder (and possibly saturated): likely underestimated; load less")
 
     if standards:
         smw = standard_mw or target_mw

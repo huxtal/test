@@ -67,3 +67,19 @@ def test_ladder_with_extra_and_missing_bands():
     cal = calibrate(missing, BENCH, reference=[50, 20])
     assert cal.unmatched == 1 and 100 not in cal.mw.tolist()
     assert float(cal.predict(ys[3])) == pytest.approx(100, rel=0.05)
+
+
+def test_ladder_mass_calibration(synth_gel):
+    # Synthetic ladder: 1.5 units per band, 3.0 in the 50/20 kDa reference bands.
+    r = analyse_gel(load_gel(synth_gel), n_lanes=9, ladder_lanes=[1], ladder_sizes=BENCH,
+                    ladder_reference=REFERENCE_BANDS["benchmark"], target_mw=42,
+                    ladder_ug=1.5)
+    lm = r.ladder_mass
+    assert all(m not in (50, 20) for _, m, _, _ in lm.points)   # references left out
+    assert lm.gsd < 1.15
+    for lane, amount in ((6, 3), (7, 6), (9, 2)):
+        assert float(lm.amount(r.targets[lane].volume)) == pytest.approx(amount, rel=0.1)
+    with_refs = analyse_gel(load_gel(synth_gel), n_lanes=9, ladder_lanes=[1],
+                            ladder_sizes=BENCH, ladder_reference=REFERENCE_BANDS["benchmark"],
+                            ladder_ug=1.5, ladder_ref_ug=3.0).ladder_mass
+    assert len(with_refs.points) == len(lm.points) + 2

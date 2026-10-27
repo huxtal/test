@@ -24,6 +24,14 @@ LADDERS: dict[str, list[float]] = {
     "precision-plus": [250, 150, 100, 75, 50, 37, 25, 20, 15, 10],             # Bio-Rad 161-0373/4
 }
 
+# Protein per band per uL of ladder, where the manufacturer states it.
+# BenchMark user guide: "each protein ... approximately 0.1 ug/uL".  The
+# intensified reference bands' amount is not stated, so they are excluded
+# from mass calibration unless --ladder-ref-ug is given.
+LADDER_UG_PER_UL: dict[str, float] = {
+    "benchmark": 0.1,
+}
+
 # Sizes that are deliberately more intense in each ladder (orientation bands).
 REFERENCE_BANDS: dict[str, list[float]] = {
     "benchmark": [50, 20],

@@ -11,8 +11,8 @@ from pathlib import Path
 import numpy as np
 
 from .image import apply_rotation, deskew_angle, load_gel
-from .ladder import LADDERS, REFERENCE_BANDS
-from .plot import plot_gel, plot_grid, plot_profiles, plot_standard
+from .ladder import LADDER_UG_PER_UL, LADDERS, REFERENCE_BANDS
+from .plot import plot_gel, plot_grid, plot_ladder_mass, plot_profiles, plot_standard
 from .quant import analyse_gel
 
 IMAGE_EXT = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
@@ -75,13 +75,22 @@ def process(path: Path, args, outdir: Path) -> list[dict]:
     if centers and crop:
         centers = [c - crop[0] for c in centers]
     standards = _standards(args.standards)
+    ladder_ug = args.ladder_ug
+    if ladder_ug is None and args.ladder_load is not None:
+        per_ul = None if args.ladder_mw else LADDER_UG_PER_UL.get(args.ladder)
+        if per_ul is None:
+            raise SystemExit(f"no stated protein concentration for ladder {args.ladder!r}; "
+                             "give --ladder-ug (ug per band as loaded) instead")
+        ladder_ug = per_ul * args.ladder_load
     res = analyse_gel(
         gel, n_lanes=args.lanes, lane_centers=centers or None,
         lane_width_frac=args.lane_width, ball_radius=args.ball,
         min_prominence=args.min_prominence, gel_floor=args.floor,
         ladder_lanes=ladder_lanes, ladder_sizes=sizes, ladder_reference=reference,
         target_mw=args.target_mw, target_tol=args.target_tol,
-        standards=standards, standard_mw=args.standard_mw)
+        standards=standards, standard_mw=args.standard_mw,
+        ladder_ug=ladder_ug, ladder_ref_ug=args.ladder_ref_ug)
+    lm = res.ladder_mass
     names = [s.strip() for s in args.lane_names.split(",")] if args.lane_names else None
 
     stem = outdir / gel.name
@@ -93,7 +102,8 @@ def process(path: Path, args, outdir: Path) -> list[dict]:
         w = csv.writer(fh)
         w.writerow(["lane", "lane_name", "band", "y_px", "mw_kDa", "mw_extrapolated",
                     "peak_height", "volume", "percent_of_lane", "is_target"]
-                   + (["amount_ug"] if res.standard else []))
+                   + (["amount_ug"] if res.standard else [])
+                   + (["ladder_ug", "ladder_ug_low", "ladder_ug_high"] if lm else []))
         for p in res.profiles:
             ln = p.lane.number
             cal = res.lane_cals.get(ln)
@@ -106,6 +116,10 @@ def process(path: Path, args, outdir: Path) -> list[dict]:
                        int(res.targets.get(ln) is b)]
                 if res.standard:
                     row.append(f"{float(res.standard.amount(b.volume)):.4g}")
+                if lm:
+                    lo, hi = lm.range(b.volume)
+                    row += [f"{float(lm.amount(b.volume)):.3g}", f"{float(lo):.3g}",
+                            f"{float(hi):.3g}"]
                 w.writerow(row)
 
     lane_rows = []
@@ -136,6 +150,12 @@ def process(path: Path, args, outdir: Path) -> list[dict]:
                     f"{t.volume / ref_band.volume:.3g}" if t else ""
             if res.standard is not None:
                 row["target_amount_ug"] = f"{float(res.standard.amount(t.volume)):.4g}" if t else ""
+            if lm is not None:
+                lo, hi = lm.range(t.volume) if t else ("", "")
+                row["target_ladder_ug"] = f"{float(lm.amount(t.volume)):.3g}" if t else ""
+                row["target_ladder_ug_range"] = f"{float(lo):.3g}-{float(hi):.3g}" if t else ""
+        if lm is not None and ln not in res.ladder_lanes:
+            row["total_ladder_ug"] = f"{float(lm.amount(p.total)):.3g}"
         lane_rows.append(row)
     keys = list(dict.fromkeys(k for r in lane_rows for k in r))
     with open(f"{stem}_lanes.csv", "w", newline="") as fh:
@@ -147,6 +167,8 @@ def process(path: Path, args, outdir: Path) -> list[dict]:
     plot_profiles(res, f"{stem}_profiles.{args.format}", names)
     if res.standard:
         plot_standard(res, f"{stem}_standard.{args.format}")
+    if lm:
+        plot_ladder_mass(res, f"{stem}_ladder_mass.{args.format}")
 
     report = {
         "file": str(path), "channel": gel.channel, "inverted": gel.inverted,
@@ -162,6 +184,11 @@ def process(path: Path, args, outdir: Path) -> list[dict]:
             "lanes": res.standard.lanes, "amounts_ug": res.standard.amounts.tolist(),
             "volumes": res.standard.volumes.tolist(), "slope": res.standard.slope,
             "intercept": res.standard.intercept, "r_squared": res.standard.r_squared},
+        "ladder_mass": None if not lm else {
+            "ug_per_band": ladder_ug, "reference_band_ug": args.ladder_ref_ug,
+            "volume_per_ug": lm.factor, "fold_uncertainty": lm.gsd,
+            "cv_percent": lm.cv_percent,
+            "bands": [{"lane": ln, "kDa": m, "ug": u, "volume": v} for ln, m, u, v in lm.points]},
         "warnings": res.warnings,
     }
     with open(f"{stem}_report.json", "w") as fh:
@@ -188,6 +215,10 @@ def process(path: Path, args, outdir: Path) -> list[dict]:
             msg += f"; target {t.mw:.1f} kDa {t.percent:.1f}%" if t else "; target not found"
             if t is not None and res.standard is not None:
                 msg += f" = {float(res.standard.amount(t.volume)):.3g} ug"
+            elif t is not None and lm is not None:
+                lo, hi = lm.range(t.volume)
+                msg += (f" ~ {float(lm.amount(t.volume)):.2g} ug "
+                        f"({float(lo):.2g}-{float(hi):.2g}, ladder-based)")
         print(msg)
     for w_ in res.warnings:
         print(f"       ! {w_}")
@@ -220,6 +251,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ladder-lane", default="1", metavar="N[,M]",
                    help="ladder lane(s); two or more correct for tilt/smile (default 1; "
                         "'0' or '' for none)")
+    p.add_argument("--ladder-load", type=float, metavar="UL",
+                   help="uL of ladder loaded: estimate ug of every band from the ladder "
+                        "(BenchMark: ~0.1 ug/uL per protein, so 5 uL ~ 0.5 ug per band)")
+    p.add_argument("--ladder-ug", type=float, metavar="UG",
+                   help="ug per ladder band as loaded (overrides --ladder-load)")
+    p.add_argument("--ladder-ref-ug", type=float, metavar="UG",
+                   help="ug in each intensified reference band (BenchMark 50/20 kDa), if "
+                        "known; otherwise they are left out of the mass calibration")
     p.add_argument("--target-mw", type=float, help="protein of interest (kDa)")
     p.add_argument("--target-tol", type=float, default=0.1,
                    help="relative MW window for the target (default 0.1 = ±10%%)")

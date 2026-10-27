@@ -8,6 +8,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.ticker  # noqa: E402
 import numpy as np  # noqa: E402
 
 from .quant import GelResult  # noqa: E402
@@ -173,4 +174,30 @@ def plot_grid(gel, path):
     ax.set_title(f"{gel.name}: choose --crop x0,y0,x1,y1 to keep only the resolving gel",
                  fontsize=9)
     fig.savefig(path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_ladder_mass(res: GelResult, path):
+    """Per-band ladder response (volume per ug) vs size: shows how far apart
+    proteins stain, i.e. how reliable ladder-based amounts are."""
+    lm = res.ladder_mass
+    fig, ax = plt.subplots(figsize=(4.6, 3.2))
+    markers = "osD^v"
+    for k, ll in enumerate(sorted({p[0] for p in lm.points})):
+        pts = [p for p in lm.points if p[0] == ll]
+        ax.plot([p[1] for p in pts], [p[3] / p[2] for p in pts], markers[k % 5], ms=5,
+                mfc="none", label=f"ladder lane {ll}")
+    ax.axhline(lm.factor, color="tab:red", lw=1, label="geometric mean")
+    ax.axhspan(lm.factor / lm.gsd, lm.factor * lm.gsd, color="tab:red", alpha=0.12,
+               label=f"x/÷{lm.gsd:.1f} (1 geom. SD)")
+    ax.set_xscale("log")
+    ax.set_xticks([10, 20, 30, 50, 100, 200])
+    ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+    ax.set_xlabel("ladder band (kDa)")
+    ax.set_ylabel("response (volume per µg)")
+    ax.set_title(f"ladder response: CV {lm.cv_percent:.0f}%", fontsize=9)
+    ax.legend(fontsize=6.5, frameon=False)
+    ax.tick_params(labelsize=7)
+    fig.tight_layout()
+    fig.savefig(path, dpi=200)
     plt.close(fig)
